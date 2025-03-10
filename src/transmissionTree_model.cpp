@@ -5,7 +5,6 @@
 //  Created by Brandon Simony on 2/12/25.
 //
 
-#include "transmissionNetwork_model.hpp"
 #include <stdio.h>
 #include <iostream>
 #include <fstream>
@@ -124,16 +123,12 @@ double draw_beta_mix(std::vector<double> a, std::vector<double> b, std::vector<d
 }
 
 
-//NegativeBinomial RV using gsl.
-int draw_negBinom_gsl(double p, double r)
-
-
-int draw_negBinom_gsl(double R0, double k)
+int draw_negBinom_gsl(double p, double n)
 {
     static Gsl_rng_wrapper rng_w;
     static gsl_rng* r;
     if(r == nullptr){ r = rng_w.get_r(); }
-    return gsl_ran_negative_binomial(r, R0, k);
+    return gsl_ran_negative_binomial(r, p, n);
 }
 
 
@@ -260,8 +255,8 @@ struct Edge {
     int to;
 };
 
-// Function for simulating a transmission network
-std::vector<Edge> generate_transmission_network( const Parameters& p) {
+// Function for simulating a transmission tree
+std::vector<Edge> generate_transmission_tree( const Parameters& p) {
     
     // int initial_cases = 1, int max_generations = 5, int max_infections = 3
     std::vector<Edge> edges;
@@ -279,35 +274,42 @@ std::vector<Edge> generate_transmission_network( const Parameters& p) {
         int generation = current.second;
         queue.pop();
         
-        if (case_counter >= p.N_threshold) continue;
+        // empty remaining nodes from the queue. Censor offspring distributions, as these individuals are otherwise counted as excess draws of zero
+        if (case_counter >= p.N_threshold) {
+            edges.push_back({current_case, -1}); // assign out node value of -1 as marker for removal
+            continue;
+        }
         
         int new_infections;
         
+        // draw from specified offspring distribution
         if (p.model_type == 0) {
             double prob = 1.0 / (1.0 + (p.R0/p.k));
             
-            new_infections = draw_negBinom_gsl(p.k, prob); // negative binomial with mean R0 defined in standard form instead of NB(mean, dispersion)
-            std:cout << prob << "; " << new_infections << std::endl;
+            new_infections = draw_negBinom_gsl(prob, p.k); // negative binomial with mean R0 defined in standard form instead of NB(mean, dispersion)
+            // std:cout << prob << "; " << new_infections << std::endl;
             
         } else if (p.model_type == 1) {
             new_infections = draw_pois_mix(p.R0, p.R0_SS, p.prob_SS);
         } else {
             new_infections = draw_poisGamma_mix(p.k, p.R0/p.k); // stochastic draw from poisson-gamma mixture. Equivalent to NB model under same starting parameters. Gamma uses shape-scale parameterization.
         }
+        // end draw from offspring distribution
         
         for (int i = 0; i < new_infections; ++i) {
             case_counter += 1;
             edges.push_back({current_case, case_counter});
             queue.push({case_counter, generation + 1});
         }
-    }
+        
+    } // end while loop
     
     return edges;
 }
 
 
 
-std::vector<Edge> transmission_network_reconstruct(const Parameters& p) {
+std::vector<Edge> transmission_tree_reconstruct(const Parameters& p) {
     
     std::vector<Edge> edges;
     std::queue<std::pair<int, int>> queue; // (case_num, generation)
@@ -405,16 +407,16 @@ int main(int argc, char* argv[]){
     Parameters p(argc, argv);
     
     
-    std::vector<Edge> network;
+    std::vector<Edge> tree;
     if(p.data_type == 1){
-        network = transmission_network_reconstruct(p);
+        tree = transmission_tree_reconstruct(p);
     }else{
-        network = generate_transmission_network(p);
+        tree = generate_transmission_tree(p);
     }
     
     
     std::cout << "from;" << "to" << std::endl;
-    for (const auto& edge : network) {
+    for (const auto& edge : tree) {
         std::cout << edge.from << ";" << edge.to << std::endl;
     }
     
